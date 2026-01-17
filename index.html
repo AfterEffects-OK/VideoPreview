@@ -264,7 +264,7 @@
       
       // 定数
       const TITLE_SCREEN_DURATION_MS = 10000; // 10秒
-      const MAX_RETRIES = 3;
+      const MAX_RETRIES = 1; // デバッグ用にリトライ回数を減らす
 
       let fullPlaylist = []; // フィルタリング前の全リスト
       let playlist = [];
@@ -656,6 +656,7 @@
         
         // GitHub Pagesなどでホストする場合、GASのウェブアプリURLを直接指定する必要があります。
         // GASのデプロイ画面で発行された「ウェブアプリのURL」をここに貼り付けてください。
+        // ※必ず「デプロイを管理」>「新バージョン」で発行した最新のURLを使用してください
         const GAS_API_URL = "https://script.google.com/macros/s/AKfycbwbPR7ewBa6iikUUEzPl3Pm3SPgIVT2ItAME9poEJE5hTBC24X91PDBTuEryf4pFGPZ/exec"; 
         const url = `${GAS_API_URL}?action=getPlaylist`;
 
@@ -679,7 +680,7 @@
                 try {
                     data = JSON.parse(text);
                 } catch (e) {
-                    console.error("レスポンスがJSONではありません:", text.substring(0, 200));
+                    console.error("レスポンスがJSONではありません。HTMLが返されている可能性があります:", text.substring(0, 500));
                     throw new Error("無効なレスポンスです。GASのデプロイ設定（アクセス権限: 全員）を確認してください。");
                 }
 
