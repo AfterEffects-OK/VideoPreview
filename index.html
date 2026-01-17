@@ -649,6 +649,73 @@
       }
 
       /**
+       * フィルターの選択肢を生成します。
+       */
+      function populateFilters() {
+        // 既存のオプションをクリア
+        while (assignmentFilter.options.length > 1) {
+            assignmentFilter.remove(1);
+        }
+        while (yearFilter.options.length > 1) {
+            yearFilter.remove(1);
+        }
+
+        // 課題名の一意なリストを作成（空文字やnullは除外）
+        const assignments = [...new Set(fullPlaylist.map(item => item.assignment).filter(a => a))];
+        // 年度の一意なリストを作成し、降順（新しい順）にソート
+        const years = [...new Set(fullPlaylist.map(item => item.year).filter(y => y))].sort().reverse();
+        
+        assignments.forEach(assignment => {
+            const option = document.createElement('option');
+            option.value = assignment;
+            option.textContent = assignment;
+            assignmentFilter.appendChild(option);
+        });
+
+        years.forEach(year => {
+            const option = document.createElement('option');
+            option.value = year;
+            option.textContent = year + '年度';
+            yearFilter.appendChild(option);
+        });
+      }
+
+      /**
+       * 選択された条件でプレイリストをフィルタリングします。
+       */
+      function filterPlaylist() {
+        const selectedAssignment = assignmentFilter.value;
+        const selectedYear = yearFilter.value;
+        const currentItem = playlist[currentVideoIndex]; // 現在再生中のアイテムを保持
+
+        playlist = fullPlaylist.filter(item => {
+            const matchAssignment = !selectedAssignment || item.assignment === selectedAssignment;
+            const matchYear = !selectedYear || item.year === selectedYear;
+            return matchAssignment && matchYear;
+        });
+
+        // 再生中の動画が新しいリストに含まれているか確認
+        let newIndex = -1;
+        if (currentItem) {
+            newIndex = playlist.findIndex(item => item.fileId === currentItem.fileId);
+        }
+
+        if (newIndex !== -1) {
+            // 含まれている場合、インデックスを更新して再生継続
+            currentVideoIndex = newIndex;
+            updatePlaylistInfo(); // 分母などを更新
+        } else {
+            // 含まれていない場合（または初期ロード時）、リストの先頭から再生
+            if (playlist.length > 0) {
+                playVideo(0);
+            } else {
+                currentVideoIndex = -1;
+                updatePlaylistInfo();
+            }
+        }
+      }
+
+      /**
        * バックエンドGASからプレイリストを取得します。
        */
       async function fetchPlaylist() {
