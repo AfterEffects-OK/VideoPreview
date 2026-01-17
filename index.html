@@ -122,7 +122,11 @@
 
       </div>
 
-      <video id="video-player" controls autoplay poster="https://placehold.co/800x450/e0e7ff/3b82f6?text=Loading+Playlist"></video>
+      <video id="video-player" controls poster="https://placehold.co/800x450/e0e7ff/3b82f6?text=Loading+Playlist"></video>
+      <div class="relative w-full">
+        <video id="video-player" controls poster="https://placehold.co/800x450/e0e7ff/3b82f6?text=Loading+Playlist"></video>
+        <iframe id="iframe-player" class="w-full aspect-video bg-black rounded-lg shadow-lg hidden" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+      </div>
       <div id="status-display" class="mt-4 text-center">
         <!-- デフォルトの文字色をダークモードで明るくする -->
         <div class="flex items-center justify-center space-x-2 text-gray-600 dark:text-gray-300">
@@ -232,6 +236,7 @@
   <script>
     document.addEventListener('DOMContentLoaded', () => {
       const videoPlayer = document.getElementById('video-player');
+      const iframePlayer = document.getElementById('iframe-player');
       const messageText = document.getElementById('message-text');
       const loadingSpinner = document.getElementById('loading-spinner');
       const playlistInfo = document.getElementById('playlist-info');
@@ -271,6 +276,7 @@
       let currentVideoIndex = -1;
       let countdownTimeout = null; // setTimeoutでプログレスバー完了時の処理を管理
       let selectedListItemIndex = -1; // 選択されたリストアイテムのインデックス (再生待ちリスト内)
+      let loadErrorOccurred = false; // 動画読み込みエラーが発生したかどうかのフラグ
       
       /**
        * Google DriveのファイルIDから直接再生可能なURLを作成します。
@@ -296,6 +302,12 @@
         // 裏で動画のプリロードを開始
         // タイトルスクリーンが不透明なので、裏でロード中の画面になっても問題ない
         const videoUrl = createVideoUrl(fileId);
+        
+        // 既存の再生を停止し、autoplayを無効化して意図しない再生を防ぐ
+        videoPlayer.pause();
+        videoPlayer.autoplay = false;
+        loadErrorOccurred = false; // エラーフラグをリセット
+        
         videoPlayer.src = videoUrl;
         videoPlayer.load();
 
@@ -357,10 +369,10 @@
       function startActualVideo(item) {
         hideTitleScreen();
 
-        // プリロードですでにエラーが発生している場合の処理
-        if (videoPlayer.error) {
-            updateStatus(`動画を再生できませんでした。次の動画へ進みます。`, false, 'text-red-600 dark:text-red-400');
-            setTimeout(playNextVideo, 2000); // エラーメッセージを読めるように少し待ってからスキップ
+        // プリロードですでにエラーが発生している場合、または明示的にエラーフラグが立っている場合はIframeモードへ
+        if (videoPlayer.error || loadErrorOccurred) {
+            updateStatus(`大容量ファイル等のため、互換モードで再生します（自動再生無効）。`, false, 'text-orange-600 dark:text-orange-400');
+            switchToIframe(item.fileId);
             return;
         }
 
@@ -381,6 +393,19 @@
         updateControls();
       }
 
+      /**
+       * 動画プレーヤーをIframeモード（Google Driveプレビュー）に切り替えます。
+       * 大容量ファイルなどで直接再生ができない場合に使用します。
+       */
+      function switchToIframe(fileId) {
+        videoPlayer.style.display = 'none';
+        videoPlayer.pause();
+        
+        iframePlayer.src = `https://drive.google.com/file/d/${fileId}/preview`;
+        iframePlayer.classList.remove('hidden');
+        
+        updateStatus(`互換モードで再生中（終了後は手動で「次の動画」を押してください）`, false, 'text-blue-500 dark:text-blue-400');
+      }
 
       /**
        * 動画の再生を試みます。（タイトルスクリーン表示から開始）
@@ -405,6 +430,11 @@
         selectedListItemIndex = -1; // 動画再生を開始したら選択状態をリセット
 
         const item = playlist[currentVideoIndex];
+
+        // プレーヤー表示をリセット（Videoタグを表示、Iframeを隠す）
+        videoPlayer.style.display = 'block';
+        iframePlayer.classList.add('hidden');
+        iframePlayer.src = ''; // Iframeの読み込みを停止
         
         // 動画の再生前にタイトルスクリーンを表示し、プログレスバーを開始
         updateStatus(`トリキリ画像を表示中... (${currentVideoIndex + 1} / ${playlist.length})`, true);
@@ -787,19 +817,29 @@
       }
 
       // イベントリスナーの設定
-      videoPlayer.addEventListener('ended', playNextVideo);
+      videoPlayer.addEventListener('ended', () => {
+        // タイトルスクリーン表示中（プリロード中）に再生終了イベントが発火した場合はスキップしない
+        if (!titleScreen.classList.contains('active')) {
+            playNextVideo();
+        }
+      });
       videoPlayer.addEventListener('error', (e) => {
         console.error('Video Playback Error:', e);
         
         // タイトルスクリーン表示中（プリロード中）のエラーの場合は、即時スキップせずにカウントダウンを継続させる
         if (titleScreen.classList.contains('active')) {
             updateStatus(`動画の読み込みに失敗しました。再生開始時にスキップします。`, false, 'text-red-500 dark:text-red-400');
+            updateStatus(`動画の読み込みに失敗しました。互換モードで再生を試みます...`, false, 'text-orange-500 dark:text-orange-400');
+            loadErrorOccurred = true; // エラーフラグを立てる
             return; 
         }
 
         // アクセス権限の問題などで再生に失敗した場合、次の動画へスキップ
         updateStatus(`現在の動画の再生に失敗しました。次の動画へスキップします。`, false, 'text-orange-500 dark:text-orange-400');
         playNextVideo(); 
+        // 再生中のエラーの場合もIframeモードへ切り替え
+        updateStatus(`再生エラーが発生しました。互換モードに切り替えます。`, false, 'text-orange-500 dark:text-orange-400');
+        switchToIframe(playlist[currentVideoIndex].fileId);
       });
 
       prevBtn.addEventListener('click', playPrevVideo);
