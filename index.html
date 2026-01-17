@@ -661,8 +661,27 @@
 
         for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {
-                const response = await fetch(url);
-                const data = await response.json();
+                // タイムアウト設定 (15秒)
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+                const response = await fetch(url, { signal: controller.signal }).catch(err => {
+                    throw new Error(err.name === 'AbortError' ? '接続がタイムアウトしました。' : err.message);
+                });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    throw new Error(`HTTPエラー: ${response.status}`);
+                }
+
+                const text = await response.text();
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    console.error("レスポンスがJSONではありません:", text.substring(0, 200));
+                    throw new Error("無効なレスポンスです。GASのデプロイ設定（アクセス権限: 全員）を確認してください。");
+                }
 
                 if (data.error) {
                     throw new Error(data.details || data.error);
