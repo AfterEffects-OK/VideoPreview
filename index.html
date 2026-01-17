@@ -278,7 +278,8 @@
        * @returns {string} 動画のストリーミングURL
        */
       function createVideoUrl(fileId) {
-        return `https://drive.google.com/uc?id=${fileId}&export=download`;
+        // confirm=t を追加して、大容量ファイルのウイルススキャン警告による読み込み失敗を軽減
+        return `https://drive.google.com/uc?id=${fileId}&export=download&confirm=t`;
       }
 
       /**
@@ -355,6 +356,13 @@
        */
       function startActualVideo(item) {
         hideTitleScreen();
+
+        // プリロードですでにエラーが発生している場合の処理
+        if (videoPlayer.error) {
+            updateStatus(`動画を再生できませんでした。次の動画へ進みます。`, false, 'text-red-600 dark:text-red-400');
+            setTimeout(playNextVideo, 2000); // エラーメッセージを読めるように少し待ってからスキップ
+            return;
+        }
 
         // srcはshowTitleScreenで既にセットされているため、ここではセットしない
         updateStatus(`再生準備完了... (${currentVideoIndex + 1} / ${playlist.length})`, true);
@@ -782,6 +790,13 @@
       videoPlayer.addEventListener('ended', playNextVideo);
       videoPlayer.addEventListener('error', (e) => {
         console.error('Video Playback Error:', e);
+        
+        // タイトルスクリーン表示中（プリロード中）のエラーの場合は、即時スキップせずにカウントダウンを継続させる
+        if (titleScreen.classList.contains('active')) {
+            updateStatus(`動画の読み込みに失敗しました。再生開始時にスキップします。`, false, 'text-red-500 dark:text-red-400');
+            return; 
+        }
+
         // アクセス権限の問題などで再生に失敗した場合、次の動画へスキップ
         updateStatus(`現在の動画の再生に失敗しました。次の動画へスキップします。`, false, 'text-orange-500 dark:text-orange-400');
         playNextVideo(); 
