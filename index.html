@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <title>Google Drive プレイリスト再生</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Interフォントの設定 */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    .container-layout {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+    video {
+      width: 100%;
+      height: auto;
+      min-height: 200px; /* モバイルでの最小高さを確保 */
+      background-color: #000;
+      border-radius: 0.5rem;
+      /* ダークモードでも影を残すが、色を調整 */
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    }
+    /* ロード中のアニメーション */
+    .spinner {
+      border: 4px solid #f3f3f3; /* Light mode border */
+      border-top: 4px solid #3b82f6;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+    }
+    /* Dark mode spinner adjustment */
+    .dark .spinner {
+        border-color: #374151; /* gray-700 equivalent */
+        border-top-color: #60a5fa; /* blue-400 equivalent */
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    /* タイトルスクリーン（トリキリ画像） */
+    #title-screen {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    #title-screen.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    /* プログレスバーのアニメーション定義 */
+    @keyframes progress-animation {
+      from { width: 0%; }
+      to { width: 100%; }
+    }
+    /* プログレスバーのスタイル */
+    #ts-progress-bar {
+      height: 8px;
+      background-color: #ffffff30; /* 背景の薄い白 */
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    #ts-progress-fill {
+      height: 100%;
+      background-color: #fff;
+      width: 0%; /* 初期状態 */
+    }
+    #title-screen.active #ts-progress-fill {
+      /* 10秒かけてアニメーション */
+      animation: progress-animation 10s linear forwards; 
+    }
+  </style>
+</head>
+<!-- Bodyにデフォルトとダークモードの背景色を設定 -->
+<body class="p-4 bg-gray-50 dark:bg-gray-900 transition-colors duration-300">
+  <div class="container-layout"> 
+    <header class="flex items-center justify-between text-center mb-6">
+      <div class="w-10"></div> <!-- Left spacer -->
+      <div class="flex-grow">
+        <h1 class="text-3xl font-bold text-gray-800 dark:text-white">📽️ Drive プレイリスト</h1>
+        <p class="text-gray-500 dark:text-gray-400">スプレッドシートの順序で動画を自動再生します</p>
+      </div>
+      <button id="help-btn" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors w-10 h-10 flex items-center justify-center" title="操作方法を表示">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-600 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
+    </header>
+
+    <!-- 動画プレーヤーコンテナ (bg-white -> dark:bg-gray-800) -->
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg mb-6 relative">
+      
+      <!-- 10秒表示用のタイトルスクリーン（トリキリ画像）オーバーレイ -->
+      <!-- タイトルスクリーン: 裏で動画をロードするため不透明(bg-blue-700)に変更 -->
+      <div id="title-screen" class="absolute inset-0 bg-blue-700 text-white flex flex-col items-center justify-center p-8 rounded-xl z-10 transition-opacity duration-500">
+        
+        <!-- 1. タイトルと氏名の中央スタックグループ -->
+        <div class="mb-12 text-center">
+            <h2 id="ts-title" class="text-5xl sm:text-7xl font-extrabold mb-4">動画タイトル</h2>
+            <p class="text-2xl sm:text-3xl font-light">制作：<span id="ts-creator" class="font-semibold">製作者氏名</span></p>
+        </div>
+        
+        <!-- 2. プログレスバーのコンテナ (下に配置) -->
+        <div id="ts-progress-bar-container" class="w-full max-w-md mb-8">
+          <div id="ts-progress-bar" class="w-full">
+            <div id="ts-progress-fill"></div>
+          </div>
+          <p class="text-xs sm:text-sm mt-2 text-center">動画再生まで 10 秒</p>
+        </div>
+
+        <!-- 3. スキップボタン -->
+        <button id="skip-btn" class="px-6 py-2 bg-white/20 hover:bg-white/30 text-white rounded-full text-sm font-semibold transition backdrop-blur-sm border border-white/30 focus:outline-none focus:ring-2 focus:ring-white/50">
+          すぐに再生 (Space)
+        </button>
+
+      </div>
+
+      <video id="video-player" controls autoplay poster="https://placehold.co/800x450/e0e7ff/3b82f6?text=Loading+Playlist"></video>
+      <div id="status-display" class="mt-4 text-center">
+        <!-- デフォルトの文字色をダークモードで明るくする -->
+        <div class="flex items-center justify-center space-x-2 text-gray-600 dark:text-gray-300">
+          <div id="loading-spinner" class="spinner"></div>
+          <p id="message-text" class="font-medium">プレイリストを読み込み中...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 制御・情報パネル (bg-white -> dark:bg-gray-800) -->
+    <div class="flex flex-col md:flex-row justify-between items-center bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md gap-4">
+      <!-- プレイリスト情報テキストの色調整 -->
+      <div id="playlist-info" class="text-sm font-semibold text-gray-700 dark:text-gray-300 text-center md:text-left">
+        現在の動画: - / -
+      </div>
+      
+      <!-- フィルターコンテナ -->
+      <div class="flex flex-col sm:flex-row gap-2 w-full md:w-auto justify-center items-center">
+        <!-- 年度フィルター -->
+        <select id="year-filter" class="w-full sm:w-32 p-2 text-sm border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none transition-colors">
+          <option value="">すべての年度</option>
+        </select>
+        <!-- 課題フィルター -->
+        <select id="assignment-filter" class="w-full sm:w-48 p-2 text-sm border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none transition-colors">
+          <option value="">すべての課題</option>
+        </select>
+      </div>
+
+      <!-- Audio Output Selector -->
+      <div id="audio-output-container" class="flex items-center w-full md:w-auto justify-center hidden">
+        <select id="audio-output-selector" class="w-full md:w-64 p-2 text-sm border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none transition-colors" title="音声の出力先を選択">
+          <!-- Options populated by JS -->
+        </select>
+      </div>
+
+      <div class="flex space-x-3">
+        <!-- prev-btnの色調整 -->
+        <button id="prev-btn" class="px-4 py-2 bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 transition duration-150" disabled>
+          前の動画
+        </button>
+        <!-- next-btnは青を維持 -->
+        <button id="next-btn" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition duration-150" disabled>
+          次の動画
+        </button>
+      </div>
+    </div>
+    
+    <!-- 再生予定プレイリスト一覧 (bg-white -> dark:bg-gray-800) -->
+    <div id="playlist-list-container" class="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md mt-4">
+        <!-- 見出しの色調整 -->
+        <h3 class="text-xl font-bold text-gray-800 dark:text-white border-b pb-2 mb-3">プレイリスト</h3>
+        <ul id="playlist-ul" class="space-y-2">
+            <!-- プレイリストロード中のテキスト色調整 -->
+            <li class="text-gray-500 dark:text-gray-400 italic">プレイリストを読み込み中です...</li>
+        </ul>
+    </div>
+  </div>
+
+  <!-- Help Modal -->
+  <div id="help-modal" class="fixed inset-0 z-50 hidden items-center justify-center">
+    <!-- Overlay -->
+    <div id="modal-overlay" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    
+    <!-- Modal Content -->
+    <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md m-4 p-6">
+      <div class="flex justify-between items-center border-b pb-3 mb-4 dark:border-gray-600">
+        <h2 class="text-2xl font-bold text-gray-800 dark:text-white">操作方法とショートカット</h2>
+        <button id="close-modal-btn" class="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-600 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      
+      <ul class="space-y-3 text-gray-700 dark:text-gray-300">
+        <li class="flex items-center justify-between">
+          <span>再生 / 一時停止</span>
+          <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">Space</kbd>
+        </li>
+        <li class="flex items-center justify-between">
+          <span>タイトル画面をスキップ</span>
+          <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">Space</kbd>
+        </li>
+        <li class="flex items-center justify-between">
+          <span>次の動画 / 前の動画</span>
+          <div class="flex gap-1">
+            <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">←</kbd>
+            <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">→</kbd>
+          </div>
+        </li>
+        <li class="flex items-center justify-between">
+          <span>リスト選択 / 再生</span>
+          <div class="flex gap-1">
+            <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">↑</kbd>
+            <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">↓</kbd>
+            <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">Enter</kbd>
+          </div>
+        </li>
+         <li class="flex items-center justify-between">
+          <span>この画面を閉じる</span>
+          <kbd class="px-2 py-1.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg dark:bg-gray-600 dark:text-gray-100 dark:border-gray-500">Esc</kbd>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const videoPlayer = document.getElementById('video-player');
+      const messageText = document.getElementById('message-text');
+      const loadingSpinner = document.getElementById('loading-spinner');
+      const playlistInfo = document.getElementById('playlist-info');
+      const prevBtn = document.getElementById('prev-btn');
+      const nextBtn = document.getElementById('next-btn');
+      const skipBtn = document.getElementById('skip-btn');
+      const assignmentFilter = document.getElementById('assignment-filter');
+      const yearFilter = document.getElementById('year-filter');
+
+      // Audio Output elements
+      const audioOutputContainer = document.getElementById('audio-output-container');
+      const audioOutputSelector = document.getElementById('audio-output-selector');
+
+      // Help Modal elements
+      const helpBtn = document.getElementById('help-btn');
+      const helpModal = document.getElementById('help-modal');
+      const closeModalBtn = document.getElementById('close-modal-btn');
+      const modalOverlay = document.getElementById('modal-overlay');
+      
+      // タイトルスクリーン要素
+      const titleScreen = document.getElementById('title-screen');
+      const tsTitle = document.getElementById('ts-title');
+      const tsCreator = document.getElementById('ts-creator');
+      
+      // プログレスバー要素
+      const tsProgressFill = document.getElementById('ts-progress-fill');
+      
+      // プレイリスト一覧要素
+      const playlistUl = document.getElementById('playlist-ul'); 
+      
+      // 定数
+      const TITLE_SCREEN_DURATION_MS = 10000; // 10秒
+      const MAX_RETRIES = 3;
+
+      let fullPlaylist = []; // フィルタリング前の全リスト
+      let playlist = [];
+      let currentVideoIndex = -1;
+      let countdownTimeout = null; // setTimeoutでプログレスバー完了時の処理を管理
+      let selectedListItemIndex = -1; // 選択されたリストアイテムのインデックス (再生待ちリスト内)
+      
+      /**
+       * Google DriveのファイルIDから直接再生可能なURLを作成します。
+       * @param {string} fileId Google DriveのファイルID
+       * @returns {string} 動画のストリーミングURL
+       */
+      function createVideoUrl(fileId) {
+        return `https://drive.google.com/uc?id=${fileId}&export=download`;
+      }
+
+      /**
+       * タイトルスクリーンを表示し、プログレスバーのアニメーションを開始します。
+       * @param {string} title 動画タイトル
+       * @param {string} creator 製作者氏名
+       * @param {string} fileId 動画ファイルID (プリロード用)
+       */
+      function showTitleScreen(title, creator, fileId) {
+        tsTitle.textContent = title;
+        tsCreator.textContent = creator;
+        titleScreen.classList.add('active');
+        
+        // 裏で動画のプリロードを開始
+        // タイトルスクリーンが不透明なので、裏でロード中の画面になっても問題ない
+        const videoUrl = createVideoUrl(fileId);
+        videoPlayer.src = videoUrl;
+        videoPlayer.load();
+
+        startProgressBar(playlist[currentVideoIndex]);
+      }
+      
+      /**
+       * タイトルスクリーンを非表示にします。
+       */
+      function hideTitleScreen() {
+        titleScreen.classList.remove('active');
+        // アニメーションをリセット
+        tsProgressFill.style.animation = 'none';
+        tsProgressFill.offsetHeight; // リフローを強制してアニメーションをリセット
+        tsProgressFill.style.animation = null;
+        
+        // videoPlayer.poster = ''; // プリロードしているのでポスター操作は不要
+      }
+
+      /**
+       * タイトルスクリーンをスキップして即座に再生します。
+       */
+      function skipTitleScreen() {
+        if (countdownTimeout) {
+          clearTimeout(countdownTimeout);
+          startActualVideo(playlist[currentVideoIndex]);
+        }
+      }
+
+      /**
+       * プログレスバーのアニメーションを開始し、完了時の処理を設定します。
+       * @param {object} item 現在のプレイリストアイテム
+       */
+      function startProgressBar(item) {
+        // 既存のタイマーをクリア
+        if (countdownTimeout) {
+          clearTimeout(countdownTimeout);
+        }
+        
+        // CSSアニメーションを再開するためにリセット
+        titleScreen.classList.remove('active');
+        // 瞬間的なDOM操作でアニメーションをリセット
+        tsProgressFill.style.animation = 'none';
+        void tsProgressFill.offsetWidth; // リフローを強制
+        
+        // 再度activeクラスを適用してアニメーションをトリガー
+        titleScreen.classList.add('active');
+        
+        // 10秒後に動画再生を開始するタイマーを設定
+        countdownTimeout = setTimeout(() => {
+          startActualVideo(item);
+        }, TITLE_SCREEN_DURATION_MS);
+      }
+
+      /**
+       * 実際の動画再生を開始します。
+       * @param {object} item 現在のプレイリストアイテム
+       */
+      function startActualVideo(item) {
+        hideTitleScreen();
+
+        // srcはshowTitleScreenで既にセットされているため、ここではセットしない
+        updateStatus(`再生準備完了... (${currentVideoIndex + 1} / ${playlist.length})`, true);
+
+        const playPromise = videoPlayer.play();
+
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            // 自動再生ブロック時の処理
+            updateStatus('動画の自動再生がブロックされました。手動で再生ボタンを押してください。', false, 'text-red-600');
+          });
+        }
+        
+        // ステータス表示の色の調整（ダークモードでも視認しやすいように）
+        updateStatus(`動画再生中: ${item.title}`, false, 'text-blue-500 dark:text-blue-400');
+        updateControls();
+      }
+
+
+      /**
+       * 動画の再生を試みます。（タイトルスクリーン表示から開始）
+       * @param {number} index 再生するプレイリストのインデックス
+       */
+      function playVideo(index) {
+        // 進行する前に既存のタイマーをクリア
+        if (countdownTimeout) {
+          clearTimeout(countdownTimeout);
+        }
+
+        if (index < 0 || index >= playlist.length) {
+          // ステータス表示の色の調整（ダークモードでも視認しやすいように）
+          updateStatus('プレイリストの最初または最後に到達しました。', false, 'text-yellow-600 dark:text-yellow-400');
+          currentVideoIndex = Math.max(0, Math.min(index, playlist.length - 1));
+          updateControls();
+          updatePlaylistInfo(); // リストの最終状態を反映
+          return;
+        }
+
+        currentVideoIndex = index;
+        selectedListItemIndex = -1; // 動画再生を開始したら選択状態をリセット
+
+        const item = playlist[currentVideoIndex];
+        
+        // 動画の再生前にタイトルスクリーンを表示し、プログレスバーを開始
+        updateStatus(`トリキリ画像を表示中... (${currentVideoIndex + 1} / ${playlist.length})`, true);
+        showTitleScreen(item.title, item.creator, item.fileId);
+
+        updatePlaylistInfo(); // 再生情報とリストを更新
+        updateControls();
+      }
+
+      /**
+       * 次の動画を再生します。
+       */
+      function playNextVideo() {
+        // カウントダウン/タイムアウトを停止
+        if (countdownTimeout) { clearTimeout(countdownTimeout); }
+
+        if (currentVideoIndex < playlist.length - 1) {
+          playVideo(currentVideoIndex + 1);
+        } else {
+          hideTitleScreen();
+          // ステータス表示の色の調整（ダークモードでも視認しやすいように）
+          updateStatus('プレイリストの最後まで再生しました。', false, 'text-green-600 dark:text-green-400');
+          currentVideoIndex = playlist.length; // プレイリストの最後まで到達したことを示す
+          updatePlaylistInfo(); // 最終リスト状態を反映
+        }
+      }
+
+      /**
+       * 前の動画を再生します。
+       */
+      function playPrevVideo() {
+        // カウントダウン/タイムアウトを停止
+        if (countdownTimeout) { clearTimeout(countdownTimeout); }
+
+        if (currentVideoIndex > 0) {
+          playVideo(currentVideoIndex - 1);
+        }
+      }
+
+      /**
+       * プレイリスト一覧（現在の動画以降）をレンダリングします。
+       */
+      function renderPlaylistList() {
+          playlistUl.innerHTML = ''; // リストをクリア
+
+          // 全リストを表示するように変更
+          const totalLength = playlist.length;
+          const listItems = []; 
+          
+          if (totalLength === 0) {
+              // ダークモード対応のテキスト色
+              playlistUl.innerHTML = '<li class="text-gray-500 dark:text-gray-400 italic py-2">再生予定の動画はありません。</li>';
+              selectedListItemIndex = -1;
+              return;
+          }
+
+          // 選択インデックスが範囲外の場合は調整
+          if (selectedListItemIndex >= totalLength) {
+             selectedListItemIndex = totalLength - 1;
+          }
+          // リストがある場合、選択状態が-1であれば、先頭を選択状態にする
+          // if (selectedListItemIndex < 0) {
+          //    selectedListItemIndex = 0; 
+          // }
+          
+          playlist.forEach((item, index) => {
+              const li = document.createElement('li');
+              
+              let liClass = 'flex justify-between items-center p-2 rounded-lg bg-gray-50 hover:bg-gray-100 dark:bg-gray-700/50 dark:hover:bg-gray-700 transition duration-150 cursor-pointer';
+              let titleColor = 'text-gray-700 dark:text-gray-200';
+              let creatorColor = 'text-gray-500 dark:text-gray-400';
+              let badgeClass = 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-300';
+
+              // 再生中のアイテム
+              if (index === currentVideoIndex) {
+                  liClass = 'flex justify-between items-center p-2 rounded-lg bg-blue-100 dark:bg-blue-900/80 border-l-4 border-blue-500 transition duration-150 cursor-pointer';
+                  titleColor = 'text-blue-800 dark:text-blue-100 font-bold';
+                  creatorColor = 'text-blue-600 dark:text-blue-300';
+                  badgeClass = 'bg-blue-500 text-white';
+              }
+              // 再生済みのアイテム
+              else if (index < currentVideoIndex) {
+                  liClass = 'flex justify-between items-center p-2 rounded-lg bg-gray-100 dark:bg-gray-800/50 opacity-60 hover:opacity-100 transition duration-150 cursor-pointer';
+              }
+
+              // 現在のリストアイテムが選択されている場合
+              if (index === selectedListItemIndex) {
+                  // 選択時のハイライトスタイル (青い背景、太い枠線、テキスト強調)
+                  liClass += ' ring-2 ring-blue-400 dark:ring-blue-500';
+              }
+              
+              li.className = liClass;
+              
+              li.dataset.index = index;
+              
+              // クリックで再生できるようにリスナーを設定
+              li.addEventListener('click', () => {
+                  selectedListItemIndex = index;
+                  playVideo(index);
+              });
+              
+              li.innerHTML = `
+                  <div class="flex-grow min-w-0">
+                      ${item.assignment ? `<span class="text-xs text-gray-500 dark:text-gray-400 block mb-0.5">${item.assignment}</span>` : ''}
+                      ${item.year ? `<span class="text-xs text-gray-400 dark:text-gray-500 inline-block mr-2">[${item.year}]</span>` : ''}
+                      <span class="font-bold ${titleColor} truncate block">${item.title}</span>
+                      <span class="text-xs ${creatorColor} block">制作: ${item.creator}</span>
+                  </div>
+                  <span class="ml-4 text-sm px-2 py-1 font-bold rounded-full ${badgeClass}">${index + 1}</span>
+              `;
+              
+              listItems.push(li);
+          });
+          
+          playlistUl.append(...listItems);
+          
+          // 選択された要素が表示領域内にあることを保証（スクロール）
+          if (selectedListItemIndex >= 0) {
+            // data-indexを使用して正確な要素を取得
+            const selectedElement = playlistUl.querySelector(`[data-index="${selectedListItemIndex}"]`);
+            if (selectedElement) {
+              selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          }
+      }
+
+      /**
+       * Sets up the audio output device selector if supported by the browser.
+       */
+      async function setupAudioOutputSelector() {
+        if (!('setSinkId' in HTMLMediaElement.prototype)) {
+          console.log('Audio output device selection is not supported by this browser.');
+          return;
+        }
+
+        try {
+          // We need to get user permission to enumerate devices with labels.
+          // A silent audio stream is enough.
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          // Stop the track immediately once we have permission.
+          stream.getTracks().forEach(track => track.stop());
+
+          await populateAudioDevices();
+          audioOutputContainer.classList.remove('hidden');
+
+          // Add event listener
+          audioOutputSelector.addEventListener('change', changeAudioOutput);
+
+        } catch (err) {
+          console.error('Error setting up audio output selector:', err);
+          // Don't show the selector if we can't get permissions or devices.
+        }
+      }
+
+      async function populateAudioDevices() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
+
+        audioOutputSelector.innerHTML = ''; // Clear existing options
+
+        if (audioOutputs.length === 0) {
+          audioOutputContainer.classList.add('hidden');
+          return;
+        }
+
+        const savedDeviceId = localStorage.getItem('audioOutputDeviceId');
+
+        audioOutputs.forEach(device => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.textContent = device.label || `Speaker ${audioOutputSelector.options.length + 1}`;
+          if (device.deviceId === savedDeviceId) {
+            option.selected = true;
+          }
+          audioOutputSelector.appendChild(option);
+        });
+
+        // Apply the saved (or default) device
+        await changeAudioOutput();
+      }
+
+      async function changeAudioOutput() {
+        const deviceId = audioOutputSelector.value;
+        if (!deviceId) return;
+
+        try {
+          await videoPlayer.setSinkId(deviceId);
+          console.log(`Audio output successfully changed to: ${audioOutputSelector.options[audioOutputSelector.selectedIndex].text}`);
+          localStorage.setItem('audioOutputDeviceId', deviceId);
+        } catch (err) {
+          console.error('Failed to set audio output device:', err);
+        }
+      }
+
+      /**
+       * プレイリスト情報と一覧を更新します。
+       */
+      function updatePlaylistInfo() {
+        if (playlist.length > 0 && currentVideoIndex < playlist.length) {
+          const title = playlist[currentVideoIndex] ? playlist[currentVideoIndex].title : '再生完了';
+          playlistInfo.textContent = `現在の動画: ${currentVideoIndex + 1} / ${playlist.length} (${title})`;
+        } else if (currentVideoIndex === playlist.length) {
+          playlistInfo.textContent = `現在の動画: プレイリスト再生完了`;
+        } else {
+          playlistInfo.textContent = `プレイリストが空です`;
+        }
+        
+        // 再生リストの更新
+        renderPlaylistList();
+      }
+      
+      /**
+       * コントロールボタンの状態を更新します。
+       */
+      function updateControls() {
+        const hasPlaylist = playlist.length > 0;
+        prevBtn.disabled = !hasPlaylist || currentVideoIndex <= 0;
+        nextBtn.disabled = !hasPlaylist || currentVideoIndex >= playlist.length - 1;
+      }
+
+      /**
+       * ステータス表示を更新します。
+       * @param {string} message 表示するメッセージ
+       * @param {boolean} isLoading スピナーを表示するかどうか
+       * @param {string} colorClass メッセージの色クラス (Tailwind)
+       */
+      function updateStatus(message, isLoading, colorClass = 'text-gray-600 dark:text-gray-300') {
+        messageText.textContent = message;
+        messageText.className = `font-medium ${colorClass}`;
+        loadingSpinner.style.display = isLoading ? 'block' : 'none';
+        
+        // タイトルスクリーン表示中はポスター画像はタイトルスクリーンが担当するため空にします
+        if (!titleScreen.classList.contains('active')) {
+            videoPlayer.poster = isLoading ? 'https://placehold.co/800x450/e0e7ff/3b82f6?text=Loading...' : '';
+        }
+      }
+
+      /**
+       * Opens the help modal.
+       */
+      function openHelpModal() {
+        helpModal.classList.remove('hidden');
+      }
+
+      /**
+       * Closes the help modal.
+       */
+      function closeHelpModal() {
+        helpModal.classList.add('hidden');
+      }
+
+      /**
+       * バックエンドGASからプレイリストを取得します。
+       */
+      async function fetchPlaylist() {
+        updateStatus('プレイリストを読み込み中...', true);
+        
+        // GitHub Pagesなどでホストする場合、GASのウェブアプリURLを直接指定する必要があります。
+        // GASのデプロイ画面で発行された「ウェブアプリのURL」をここに貼り付けてください。
+        const GAS_API_URL = "https://script.google.com/macros/s/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/exec"; 
+        const url = `${GAS_API_URL}?action=getPlaylist`;
+
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.details || data.error);
+                }
+
+                fullPlaylist = data.playlist || [];
+                if (fullPlaylist.length === 0) {
+                    updateStatus('スプレッドシートに動画IDが見つかりませんでした。', false, 'text-red-500 dark:text-red-400');
+                    updatePlaylistInfo(); // 空リストを反映
+                    return;
+                }
+
+                updateStatus(`プレイリスト (${fullPlaylist.length} 件) の読み込みに成功しました。`, false, 'text-blue-500 dark:text-blue-400');
+                populateFilters();
+                filterPlaylist(); // 初期フィルタリング（すべて）と再生開始
+                return;
+
+            } catch (error) {
+                console.error('プレイリスト取得エラー:', error);
+                if (attempt === MAX_RETRIES - 1) {
+                    updateStatus(`プレイリストの取得に失敗しました。詳細: ${error.message}`, false, 'text-red-700 dark:text-red-400');
+                } else {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+        }
+      }
+
+      // イベントリスナーの設定
+      videoPlayer.addEventListener('ended', playNextVideo);
+      videoPlayer.addEventListener('error', (e) => {
+        console.error('Video Playback Error:', e);
+        // アクセス権限の問題などで再生に失敗した場合、次の動画へスキップ
+        updateStatus(`現在の動画の再生に失敗しました。次の動画へスキップします。`, false, 'text-orange-500 dark:text-orange-400');
+        playNextVideo(); 
+      });
+
+      prevBtn.addEventListener('click', playPrevVideo);
+      nextBtn.addEventListener('click', playNextVideo);
+      skipBtn.addEventListener('click', skipTitleScreen);
+      assignmentFilter.addEventListener('change', filterPlaylist);
+      yearFilter.addEventListener('change', filterPlaylist);
+      // Help Modal Listeners
+      helpBtn.addEventListener('click', openHelpModal);
+      closeModalBtn.addEventListener('click', closeHelpModal);
+      modalOverlay.addEventListener('click', closeHelpModal);
+      
+      // --- キーボードショートカットの追加 ---
+      document.addEventListener('keydown', (event) => {
+          // If modal is open, only listen for Escape key
+          if (!helpModal.classList.contains('hidden')) {
+              if (event.key === 'Escape') {
+                  closeHelpModal();
+              }
+              return; // Do nothing else
+          }
+
+          // プレイリストがロードされていない場合は無視
+          if (playlist.length === 0) return;
+          
+          // フォーカスが入力要素にある場合はショートカットを無効にする
+          if (event.target.tagName === 'INPUT' || 
+              event.target.tagName === 'TEXTAREA' || 
+              event.target.isContentEditable) {
+              return;
+          }
+
+          const totalLength = playlist.length;
+
+          switch (event.key) {
+              case 'ArrowLeft': // 左矢印キー: 前の動画
+                  event.preventDefault(); // ブラウザのデフォルト動作（スクロール）を防止
+                  if (!prevBtn.disabled) {
+                      playPrevVideo();
+                  }
+                  break;
+              case 'ArrowRight': // 右矢印キー: 次の動画
+                  event.preventDefault(); // ブラウザのデフォルト動作（スクロール）を防止
+                  if (!nextBtn.disabled) {
+                      playNextVideo();
+                  }
+                  break;
+              case ' ': // スペースキー: 再生/一時停止
+                  // タイトルスクリーンが表示されていない、かつプレーヤーがアクティブな場合のみ
+                  if (!titleScreen.classList.contains('active') && currentVideoIndex < playlist.length) {
+                      event.preventDefault();
+                      if (videoPlayer.paused) {
+                          // 再生開始
+                          videoPlayer.play().catch(error => {
+                              console.warn("Play failed (space key):", error);
+                          });
+                          updateStatus(`動画再生中: ${playlist[currentVideoIndex].title}`, false, 'text-blue-500 dark:text-blue-400');
+                      } else {
+                          // 一時停止
+                          videoPlayer.pause();
+                          updateStatus(`動画一時停止中: ${playlist[currentVideoIndex].title}`, false, 'text-yellow-600 dark:text-yellow-400');
+                      }
+                  } else if (titleScreen.classList.contains('active')) {
+                      // タイトルスクリーン表示中はスキップ
+                      event.preventDefault();
+                      skipTitleScreen();
+                  }
+                  break;
+              
+              // --- 新しいキー操作: プレイリストナビゲーション ---
+              case 'ArrowUp':
+              case 'ArrowDown':
+                  event.preventDefault(); // スクロールを防止
+
+                  if (totalLength <= 0) {
+                    // 再生待ちリストがない場合
+                    selectedListItemIndex = -1;
+                    return;
+                  }
+                  
+                  // 初期選択または範囲外の場合は調整
+                  if (selectedListItemIndex === -1) {
+                      selectedListItemIndex = currentVideoIndex; // 現在の動画から開始
+                  } else if (event.key === 'ArrowUp') {
+                      // 上に移動
+                      selectedListItemIndex = Math.max(0, selectedListItemIndex - 1);
+                  } else if (event.key === 'ArrowDown') {
+                      // 下に移動
+                      selectedListItemIndex = Math.min(totalLength - 1, selectedListItemIndex + 1);
+                  }
+                  
+                  // 選択状態を反映してリストを再描画
+                  renderPlaylistList();
+                  break;
+
+              case 'Enter': // エンターキー: 選択した動画を再生
+                  if (selectedListItemIndex >= 0 && totalLength > 0) {
+                      event.preventDefault();
+                      // 選択した動画の再生を開始
+                      playVideo(selectedListItemIndex);
+                      // playVideo内でselectedListItemIndexはリセットされます
+                  } else if (currentVideoIndex >= 0 && currentVideoIndex < playlist.length) {
+                    // 選択がない場合、スペースキーと同じ動作（再生/一時停止）を行う
+                    if (!titleScreen.classList.contains('active')) {
+                         event.preventDefault();
+                         if (videoPlayer.paused) {
+                              videoPlayer.play().catch(error => {
+                                  console.warn("Play failed (enter key):", error);
+                              });
+                              updateStatus(`動画再生中: ${playlist[currentVideoIndex].title}`, false, 'text-blue-500 dark:text-blue-400');
+                          } else {
+                              videoPlayer.pause();
+                              updateStatus(`動画一時停止中: ${playlist[currentVideoIndex].title}`, false, 'text-yellow-600 dark:text-yellow-400');
+                          }
+                    }
+                  }
+                  break;
+          }
+      });
+      // --- キーボードショートカットの追加 終了 ---
+
+      // アプリケーション開始
+      fetchPlaylist();
+      setupAudioOutputSelector();
+    });
+  </script>
+</body>
+</html>       case ' ': // スペースキー: 再生/一時停止
+                  // タイトルスクリーンが表示されていない、かつプレーヤーがアクティブな場合のみ
+                  if (!titleScreen.classList.contains('active') && currentVideoIndex < playlist.length) {
+                      event.preventDefault();
+                      if (videoPlayer.paused) {
+                          // 再生開始
+                          videoPlayer.play().catch(error => {
+                              console.warn("Play failed (space key):", error);
+                          });
+                          updateStatus(`動画再生中: ${playlist[currentVideoIndex].title}`, false, 'text-blue-500 dark:text-blue-400');
+                      } else {
+                          // 一時停止
+                          videoPlayer.pause();
+                          updateStatus(`動画一時停止中: ${playlist[currentVideoIndex].title}`, false, 'text-yellow-600 dark:text-yellow-400');
+                      }
+                  } else if (titleScreen.classList.contains('active')) {
+                      // タイトルスクリーン表示中はスキップ
+                      event.preventDefault();
+                      skipTitleScreen();
+                  }
+                  break;
+              
+              // --- 新しいキー操作: プレイリストナビゲーション ---
+              case 'ArrowUp':
+              case 'ArrowDown':
+                  event.preventDefault(); // スクロールを防止
+
+                  if (totalLength <= 0) {
+                    // 再生待ちリストがない場合
+                    selectedListItemIndex = -1;
+                    return;
+                  }
+                  
+                  // 初期選択または範囲外の場合は調整
+                  if (selectedListItemIndex === -1) {
+                      selectedListItemIndex = currentVideoIndex; // 現在の動画から開始
+                  } else if (event.key === 'ArrowUp') {
+                      // 上に移動
+                      selectedListItemIndex = Math.max(0, selectedListItemIndex - 1);
+                  } else if (event.key === 'ArrowDown') {
+                      // 下に移動
+                      selectedListItemIndex = Math.min(totalLength - 1, selectedListItemIndex + 1);
+                  }
+                  
+                  // 選択状態を反映してリストを再描画
+                  renderPlaylistList();
+                  break;
+
+              case 'Enter': // エンターキー: 選択した動画を再生
+                  if (selectedListItemIndex >= 0 && totalLength > 0) {
+                      event.preventDefault();
+                      // 選択した動画の再生を開始
+                      playVideo(selectedListItemIndex);
+                      // playVideo内でselectedListItemIndexはリセットされます
+                  } else if (currentVideoIndex >= 0 && currentVideoIndex < playlist.length) {
+                    // 選択がない場合、スペースキーと同じ動作（再生/一時停止）を行う
+                    if (!titleScreen.classList.contains('active')) {
+                         event.preventDefault();
+                         if (videoPlayer.paused) {
+                              videoPlayer.play().catch(error => {
+                                  console.warn("Play failed (enter key):", error);
+                              });
+                              updateStatus(`動画再生中: ${playlist[currentVideoIndex].title}`, false, 'text-blue-500 dark:text-blue-400');
+                          } else {
+                              videoPlayer.pause();
+                              updateStatus(`動画一時停止中: ${playlist[currentVideoIndex].title}`, false, 'text-yellow-600 dark:text-yellow-400');
+                          }
+                    }
+                  }
+                  break;
+          }
+      });
+      // --- キーボードショートカットの追加 終了 ---
+
+      // アプリケーション開始
+      fetchPlaylist();
+      setupAudioOutputSelector();
+    });
+  </script>
+</body>
+</html>
